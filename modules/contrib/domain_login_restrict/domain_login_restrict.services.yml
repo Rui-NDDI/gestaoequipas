@@ -1,0 +1,4 @@
+services:
+  domain_login_restrict.login_block:
+    class: Drupal\domain_login_restrict\Form\DomainListForm
+    arguments: ['@entity_type.manager']

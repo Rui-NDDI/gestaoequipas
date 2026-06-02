@@ -1,0 +1,4 @@
+login to any domain:
+  title: 'Login to any domain'
+  description: 'Users with this permission can log in to any domain.'
+  restrict access: true

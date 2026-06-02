@@ -1,0 +1,13 @@
+name: 'Domain Login Restrict'
+type: module
+description: 'Restrict user login to affiliate domain only'
+core_version_requirement: ^8 || ^9 || ^10
+package: Domain
+dependencies:
+  - domain:domain
+  - domain:domain_access
+
+# Information added by Drupal.org packaging script on 2023-03-10
+version: '8.x-1.2'
+project: 'domain_login_restrict'
+datestamp: 1678429582
