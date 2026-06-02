@@ -5,10 +5,14 @@
  * Contains domain_login_restrict.module.
  */
 
+use Drupal\user\Entity\Role;
 use Drupal\user\Entity\User;
 use Drupal\Core\Routing\RouteMatchInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Session\AccountInterface;
+use Drupal\user\RoleInterface;
+use Drupal\user\UserInterface;
+use Symfony\Component\HttpFoundation\JsonResponse;
 
 /**
  * Implements hook_help().
@@ -158,22 +162,28 @@ function domain_login_restrict_form_alter(&$form, FormStateInterface $form_state
           '#collapsed' => FALSE,
           '#weight' => 1,
         ];
-
+        $roles = Role::loadMultiple();
+        unset($roles[RoleInterface::ANONYMOUS_ID]);
+        // Ignore Authenticated user as this is not required.
+        unset($roles[RoleInterface::AUTHENTICATED_ID]);
+        $roles = array_map(fn(RoleInterface $role) => $role->label(), $roles);
         // Add form element.
+        $domainLoginDefault = \Drupal::state()->get('domain_login_restrict_role_' . $currentDomain->id());
         $form['domain_account_login_fieldset']['domain_login_restrict_role_' . $currentDomain->id()] = [
           '#type' => 'checkboxes',
           '#title' => t('Allow Login to Role'),
-          '#options' => user_role_names(),
-          '#default_value' => \Drupal::state()->get('domain_login_restrict_role_' . $currentDomain->id()),
+          '#options' => $roles,
+          '#default_value' => $domainLoginDefault ?? [],
           '#description' => t('User only able to login, if they have above configured roles'),
           '#weight' => 1,
         ];
 
+        $domainAssignDefault = \Drupal::state()->get('domain_login_restrict_assign_role_' . $currentDomain->id());
         $form['domain_account_login_fieldset']['domain_login_restrict_assign_role_' . $currentDomain->id()] = [
           '#type' => 'checkboxes',
           '#title' => t('Assign Role to New User'),
-          '#options' => user_role_names(),
-          '#default_value' => \Drupal::state()->get('domain_login_restrict_assign_role_' . $currentDomain->id()),
+          '#options' => $roles,
+          '#default_value' => $domainAssignDefault ?? [],
           '#description' => t('Assign Selected roles to newly create users.'),
           '#weight' => 1,
         ];
@@ -270,59 +280,7 @@ function _domain_login_restrict_reset_password_validate(&$form, FormStateInterfa
  *   Form State.
  */
 function _domain_login_restrict_validate(&$form, FormStateInterface $form_state) {
-  // Check setting enabled at '/admin/config/domain/settings'.
-  if (\Drupal::state()->get('domain_login_restrict_enabled')) {
-    $values = $form_state->getValues();
-    $userName = $values['name'];
-    if (!empty($userName)) {
-      $user = _domain_login_restrict_user_lookup($userName);
-      if ($user) {
-        // If user have permisison to by pass validation then return from here.
-        if ($user->hasPermission('login to any domain')) {
-          return;
-        }
-        // Get user roles.
-        $rids = $user->getRoles();
-
-        // Get domain access list from users object, prepare array.
-        $field_domain_access = $user->get('field_domain_access')->getValue();
-        $userDomainList = [];
-        foreach ($field_domain_access as $domain_access) {
-          $userDomainList[] = $domain_access['target_id'];
-        }
-
-        // Get current domain and get settings.
-        $currentDomain = \Drupal::service('domain.negotiator')->getActiveDomain();
-
-        // If current domain is not part of user domain setting and user does
-        // not have permission to bypass using
-        // 'login to any domain' Drupal then show error to the user and log
-        // there error message.
-        if (!in_array($currentDomain->id(), $userDomainList) && !$user->hasPermission('login to any domain')) {
-          $form_state->setErrorByName('name', t('%name is not recognized as a username or email to this site.', ['%name' => $userName]));
-          \Drupal::logger('domain_login_restrict')->error('Login attempt restricted for %user by <em>Domain login Restrict</em>. Domain <em>' . $currentDomain->getHostname() . '</em> was not  assigned to them.', ['%user' => $userName]);
-        }
-        // /admin/config/domain/edit/DOMAIN_ID
-        // NOTE: if domain specific role setting enabled then:
-        // if current domain roles not matching with user roles and and user
-        // does not have permission to bypass using
-        // 'login to any domain' permission then show error to the user and
-        // log there error message.
-        $domainWiseRoleSettings = \Drupal::state()->get('domain_login_restrict_role_' . $currentDomain->id());
-        // Remove empty roles (not selected on domain)
-        if (is_array($domainWiseRoleSettings) && !empty($domainWiseRoleSettings)) {
-          $domainWiseRoleSettings = array_filter($domainWiseRoleSettings);
-        }
-        else {
-          $domainWiseRoleSettings = [];
-        }
-        if (!empty($domainWiseRoleSettings) && empty(array_intersect($domainWiseRoleSettings, $rids)) && !$user->hasPermission('login to any domain')) {
-          $form_state->setErrorByName('name', t('%name is not recognized as a username or email to this site.', ['%name' => $userName]));
-          \Drupal::logger('domain_login_restrict')->error('Login attempt restricted for %user by <em>Domain login Restrict</em>. Domain <em>' . $currentDomain->getHostname() . '</em> roles not present on user.', ['%user' => $userName]);
-        }
-      }
-    }
-  }
+  _domain_login_restrict_check($form_state->getValue('name'), $form_state);
 }
 
 /**
@@ -360,4 +318,99 @@ function _domain_login_restrict_user_lookup($userName) {
   $user = reset($users);
 
   return $user;
+}
+
+/**
+ * Check if a certain user is allowed to login to the current domain or not.
+ *
+ * @param string $userName
+ *   User name.
+ * @param \Drupal\Core\Form\FormStateInterface $form_state
+ *   Form State.
+ *
+ * @return mixed
+ *   User Object.
+ */
+function _domain_login_restrict_check(string $userName, ?FormStateInterface $form_state = NULL) {
+  // Check setting enabled at '/admin/config/domain/settings' also, the user
+  // data.
+  if (
+    \Drupal::state()->get('domain_login_restrict_enabled') &&
+    !empty($userName) &&
+    $user = _domain_login_restrict_user_lookup($userName)
+  ) {
+    // If user have permisison to by pass validation then return from here.
+    if ($user->hasPermission('login to any domain')) {
+      return;
+    }
+    // Get user roles.
+    $rids = $user->getRoles();
+
+    // Get domain access list from users object, prepare array.
+    $field_domain_access = $user->get('field_domain_access')->getValue();
+    $userDomainList = [];
+    foreach ($field_domain_access as $domain_access) {
+      $userDomainList[] = $domain_access['target_id'];
+    }
+
+    // Get current domain and get settings.
+    $currentDomain = \Drupal::service('domain.negotiator')->getActiveDomain();
+
+    // If current domain is not part of user domain setting and user does
+    // not have permission to bypass using
+    // 'login to any domain' Drupal then show error to the user and log
+    // there error message.
+    if (!in_array($currentDomain->id(), $userDomainList) && !$user->hasPermission('login to any domain')) {
+      if (!empty($form_state)) {
+        $form_state->setErrorByName('name', t('%name is not recognized as a username or email to this site.', ['%name' => $userName]));
+      } else {
+        $response = new JsonResponse(
+          ['error' => t('@name is not recognized as a username or email to this site.', ['@name' => $userName])],
+          403
+        );
+        $response->send();
+        exit;
+      }
+      \Drupal::logger('domain_login_restrict')->error('Login attempt restricted for %user by <em>Domain login Restrict</em>. Domain <em>' . $currentDomain->getHostname() . '</em> was not  assigned to them.', ['%user' => $userName]);
+    }
+
+    // /admin/config/domain/edit/DOMAIN_ID
+    // NOTE: if domain specific role setting enabled then:
+    // if current domain roles not matching with user roles and and user
+    // does not have permission to bypass using
+    // 'login to any domain' permission then show error to the user and
+    // log there error message.
+    $domainWiseRoleSettings = \Drupal::state()->get('domain_login_restrict_role_' . $currentDomain->id());
+    // Remove empty roles (not selected on domain)
+    if (is_array($domainWiseRoleSettings) && !empty($domainWiseRoleSettings)) {
+      $domainWiseRoleSettings = array_filter($domainWiseRoleSettings);
+    } else {
+      $domainWiseRoleSettings = [];
+    }
+
+    if (!empty($domainWiseRoleSettings) && empty(array_intersect($domainWiseRoleSettings, $rids)) && !$user->hasPermission('login to any domain')) {
+      if (!empty($form_state)) {
+        $form_state->setErrorByName('name', t('%name is not recognized as a username or email to this site.', ['%name' => $userName]));
+      } else {
+        $response = new JsonResponse(
+          ['error' => t('@name is not recognized as a username or email to this site.', ['@name' => $userName])],
+          403
+        );
+        $response->send();
+        exit;
+      }
+      \Drupal::logger('domain_login_restrict')->error('Login attempt restricted for %user by <em>Domain login Restrict</em>. Domain <em>' . $currentDomain->getHostname() . '</em> roles not present on user.', ['%user' => $userName]);
+    }
+  }
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function domain_login_restrict_user_login(UserInterface $account) {
+  $request = \Drupal::request();
+  // Current request object is an actual API call.
+  if (in_array($request->getPreferredFormat(), ['api_json', 'json'])) {
+    _domain_login_restrict_check($account->get('name')->value);
+  }
 }
