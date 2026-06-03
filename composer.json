@@ -43,7 +43,7 @@
         "drupal/restui": "^1.22",
         "drupal/search_api": "^1.35",
         "drupal/tcpdf": "^2.0",
-        "drupal/twbstools": "2.1.x-dev",
+        "drupal/twbstools": "^2.1",
         "drupal/views_aggregator": "^2.0",
         "drupal/views_data_export": "^1.4",
         "drush/drush": "^13.7"
