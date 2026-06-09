@@ -42,6 +42,7 @@
         "drupal/paragraphs": "^1.17",
         "drupal/restui": "^1.22",
         "drupal/search_api": "^1.35",
+        "drupal/social_auth_entra_id": "^2.0",
         "drupal/tcpdf": "^2.0",
         "drupal/twbstools": "^2.1",
         "drupal/views_aggregator": "^2.0",
